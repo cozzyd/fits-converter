@@ -44,6 +44,7 @@ public:
     virtual ~Column() = default;
     virtual void write(fitsfile* fp, int colnum, LONGLONG row, int& status) = 0;
     std::string name;
+    std::string title;
     std::string tform;
 };
 
@@ -51,8 +52,9 @@ template <typename T>
 class ScalarColumn : public Column {
     TTreeReaderValue<T> v;
 public:
-    ScalarColumn(TTreeReader& r, const std::string& nm) : v(r, nm.c_str()) {
+    ScalarColumn(TTreeReader& r, const std::string& nm, const std::string & ttl) : v(r, nm.c_str()) {
         name = nm;
+        title = ttl;
         tform = std::string("1") + FitsTrait<T>::tc;
     }
     void write(fitsfile* fp, int colnum, LONGLONG row, int& status) override {
@@ -67,9 +69,10 @@ class FixedArrayColumn : public Column {
     long fixed_len;
     std::unique_ptr<T[]> buf;
 public:
-    FixedArrayColumn(TTreeReader& r, const std::string& nm, long n)
+    FixedArrayColumn(TTreeReader& r, const std::string& nm, const std::string & ttl, long n)
         : a(r, nm.c_str()), fixed_len(n), buf(new T[n]()) {
         name = nm;
+        title = ttl;
         tform = std::to_string(n) + FitsTrait<T>::tc;
     }
     void write(fitsfile* fp, int colnum, LONGLONG row, int& status) override {
@@ -87,9 +90,10 @@ class VlaColumn : public Column {
     long max_vla;
     std::unique_ptr<T[]> buf;
 public:
-    VlaColumn(TTreeReader& r, const std::string& nm, long maxn)
+    VlaColumn(TTreeReader& r, const std::string& nm, const std::string & ttl, long maxn)
         : a(r, nm.c_str()), max_vla(maxn), buf(new T[maxn]) {
         name = nm;
+        title = ttl;
         char tf[64];
         std::snprintf(tf, sizeof tf, "1P%c(%ld)", FitsTrait<T>::tc, maxn);
         tform = tf;
@@ -113,9 +117,10 @@ class StringColumn : public Column {
     long fixed_len;
     std::vector<char> buf;
 public:
-    StringColumn(TTreeReader& r, const std::string& nm, long n)
+    StringColumn(TTreeReader& r, const std::string& nm, const std::string & ttle, long n)
         : a(r, nm.c_str()), fixed_len(n), buf(n + 1, 0) {
         name = nm;
+        title = ttle;
         tform = std::to_string(n) + "A";
     }
     void write(fitsfile* fp, int colnum, LONGLONG row, int& status) override {
@@ -186,11 +191,11 @@ inline bool is_vector_type(const std::string& t) {
     if (elem == ROOT_NAME) {                                                   \
         switch (shape) {                                                       \
             case Shape::Scalar:                                                \
-                return std::make_unique<ScalarColumn<CPP_TYPE>>(reader, name); \
+                return std::make_unique<ScalarColumn<CPP_TYPE>>(reader, name, title); \
             case Shape::FixedArray:                                            \
-                return std::make_unique<FixedArrayColumn<CPP_TYPE>>(reader, name, n); \
+                return std::make_unique<FixedArrayColumn<CPP_TYPE>>(reader, name,title,  n); \
             case Shape::Vla:                                                   \
-                return std::make_unique<VlaColumn<CPP_TYPE>>(reader, name, max_vla); \
+                return std::make_unique<VlaColumn<CPP_TYPE>>(reader, name, title, max_vla); \
             case Shape::String:                                                \
                 break;                                                         \
         }                                                                      \
@@ -198,10 +203,11 @@ inline bool is_vector_type(const std::string& t) {
 
 inline std::unique_ptr<Column> make_column(TTreeReader& reader,
                                            const std::string& name,
+                                           const std::string& title,
                                            const std::string& elem_raw,
                                            Shape shape, long n, long max_vla) {
     if (shape == Shape::String) {
-        return std::make_unique<StringColumn>(reader, name, n);
+        return std::make_unique<StringColumn>(reader, name, title, n);
     }
     const std::string elem = normalize_type(elem_raw);
     TREE2FITS_DISPATCH("Bool_t",    bool)
@@ -238,6 +244,7 @@ inline int convert_tree_to_fits(TTree* tree, const char* tname,
 
     struct ColumnSpec {
         std::string name;
+        std::string title;
         std::string elem;
         Shape shape;
         long n;
@@ -249,6 +256,7 @@ inline int convert_tree_to_fits(TTree* tree, const char* tname,
     for (int i = 0; i < nleaves; ++i) {
         TLeaf* leaf = static_cast<TLeaf*>(leaves->At(i));
         const std::string lname = leaf->GetName();
+        const std::string ltitle = leaf->GetTitle();
         const std::string ltype = leaf->GetTypeName();
 
         if (is_vector_type(ltype)) {
@@ -258,7 +266,7 @@ inline int convert_tree_to_fits(TTree* tree, const char* tname,
                           << "': cannot parse element type from '" << ltype << "'\n";
                 continue;
             }
-            specs.push_back({lname, elem, Shape::Vla, 0});
+            specs.push_back({lname, ltitle, elem, Shape::Vla, 0});
             continue;
         }
 
@@ -266,20 +274,20 @@ inline int convert_tree_to_fits(TTree* tree, const char* tname,
         const long static_len = leaf->GetLenStatic();
 
         if (ltype == "Char_t" && !lc && static_len > 1) {
-            specs.push_back({lname, "", Shape::String, static_len});
+            specs.push_back({lname, ltitle,"", Shape::String, static_len});
         } else if (lc) {
-            specs.push_back({lname, ltype, Shape::Vla, 0});
+            specs.push_back({lname, ltitle,ltype, Shape::Vla, 0});
         } else if (static_len > 1) {
-            specs.push_back({lname, ltype, Shape::FixedArray, static_len});
+            specs.push_back({lname, ltitle,ltype, Shape::FixedArray, static_len});
         } else {
-            specs.push_back({lname, ltype, Shape::Scalar, 1});
+            specs.push_back({lname, ltitle,ltype, Shape::Scalar, 1});
         }
     }
 
     std::vector<std::unique_ptr<Column>> cols;
     cols.reserve(specs.size());
     for (auto& sp : specs) {
-        auto col = make_column(reader, sp.name, sp.elem, sp.shape, sp.n, max_vla);
+        auto col = make_column(reader, sp.name, sp.title, sp.elem, sp.shape, sp.n, max_vla);
         if (!col) {
             std::cerr << "skipping '" << sp.name << "': unsupported element type '"
                       << sp.elem << "'\n";
@@ -307,7 +315,7 @@ inline int convert_tree_to_fits(TTree* tree, const char* tname,
     for (int i = 0; i < ncols; ++i) {
         ttype[i] = const_cast<char*>(cols[i]->name.c_str());
         tform[i] = const_cast<char*>(cols[i]->tform.c_str());
-        tunit[i] = const_cast<char*>(empty.c_str());
+        tunit[i] = const_cast<char*>(cols[i]->title.c_str());
     }
     fits_create_tbl(fptr, BINARY_TBL, nentries, ncols,
                     ttype.data(), tform.data(), tunit.data(),
