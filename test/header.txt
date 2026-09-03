@@ -1,0 +1,6 @@
+# Example header-template file for tree2fits/rdf2fits --header.
+# One "KEY = value / comment" per line; blank lines and '#' comments ignored.
+TELESCOP = 'PUEO'          / telescope name
+OBSERVER = 'A. Vieregg'   / who took the data
+EXPTIME  = 3600.0         / [s] exposure time
+COMMENT  Header attached by the tree2fits test target.
