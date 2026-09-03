@@ -29,6 +29,11 @@ test: all
 	./test/make_test_tree /tmp/test_tree.root
 	./tree2fits /tmp/test_tree.root events /tmp/test_tree.fits
 	./test/dump_fits /tmp/test_tree.fits
+	@echo "=== with a header template (--header + --header-key) ==="
+	./tree2fits /tmp/test_tree.root events /tmp/test_tree_hdr.fits \
+		--header test/header.txt \
+		--header-key "ORIGIN = 'KICP' / written at UChicago"
+	./test/dump_fits /tmp/test_tree_hdr.fits
 
 clean:
 	rm -f $(BINS)

@@ -15,6 +15,7 @@
 #include <cctype>
 #include <cstdio>
 #include <cstdlib>
+#include <fstream>
 #include <iostream>
 #include <map>
 #include <memory>
@@ -236,10 +237,87 @@ inline void check_fits(int status, const char* what) {
     if (status) die_fits(status, what);
 }
 
+// Extra keywords to place in the output bintable header.
+struct HeaderSpec {
+    // FITS file (cfitsio extended syntax, e.g. "hk.fits[EVENTS]") whose HDU
+    // header is copied first. Empty = no copy.
+    std::string copy_from;
+    // cfitsio header-template lines ("KEY = value / comment"), applied in
+    // order after copy_from, so they override copied keywords.
+    std::vector<std::string> templates;
+};
+
+// Copies keywords from the (possibly extension-qualified) source HDU,
+// skipping anything structural: NAXISn, TFORMn, TUNITn, EXTNAME, checksums,
+// column-indexed WCS, etc. Keeps reference-system keys (RADESYS, EQUINOX,
+// MJDREF, ...), COMMENT/HISTORY, and all user keywords.
+inline void copy_header_keys(fitsfile* out, const std::string& src, int& status) {
+    fitsfile* in = nullptr;
+    fits_open_file(&in, src.c_str(), READONLY, &status);
+    check_fits(status, "open --header-from file");
+    int nkeys = 0;
+    fits_get_hdrspace(in, &nkeys, nullptr, &status);
+    char card[FLEN_CARD];
+    for (int i = 1; i <= nkeys && !status; ++i) {
+        fits_read_record(in, i, card, &status);
+        if (fits_get_keyclass(card) >= TYP_REFSYS_KEY)
+            fits_write_record(out, card, &status);
+    }
+    fits_close_file(in, &status);
+    check_fits(status, "copy header keywords");
+}
+
+// Applies one header-template line per entry. Supports the full cfitsio
+// template syntax: "KEY = value / comment" appends or updates, COMMENT and
+// HISTORY append, "-KEY" deletes an existing keyword.
+inline void apply_header_templates(fitsfile* out,
+                                   const std::vector<std::string>& lines,
+                                   int& status) {
+    for (const auto& raw : lines) {
+        std::string line = trim(raw);
+        if (line.empty() || line[0] == '#') continue;
+        char card[FLEN_CARD];
+        int keytype = 0;
+        fits_parse_template(const_cast<char*>(line.c_str()), card, &keytype, &status);
+        if (status) {
+            std::cerr << "bad header template line: " << line << "\n";
+            die_fits(status, "parse header template");
+        }
+        if (keytype == 2) break;  // END card: ignore the rest
+        if (keytype == 1) {       // COMMENT / HISTORY: always append
+            fits_write_record(out, card, &status);
+        } else if (keytype == 0) {  // regular keyword: append or update
+            char keyname[FLEN_KEYWORD];
+            int keylen = 0;
+            fits_get_keyname(card, keyname, &keylen, &status);
+            fits_update_card(out, keyname, card, &status);
+        } else if (keytype == -1) {  // "-KEY": delete if present
+            fits_delete_key(out, card, &status);
+            if (status == KEY_NO_EXIST) status = 0;
+        } else {
+            std::cerr << "skipping unsupported header template line: " << line << "\n";
+        }
+        check_fits(status, "apply header template");
+    }
+}
+
+// Reads a header-template file (one "KEY = value / comment" per line; blank
+// lines and '#' comments ignored) into spec.templates.
+inline void read_header_template_file(const std::string& path, HeaderSpec& spec) {
+    std::ifstream in(path);
+    if (!in) {
+        std::cerr << "could not open header file " << path << "\n";
+        std::exit(1);
+    }
+    std::string line;
+    while (std::getline(in, line)) spec.templates.push_back(line);
+}
+
 // Walks the tree's leaves and writes a FITS binary table HDU. Returns 0 on
 // success. Exits the process on FITS errors via die_fits().
 inline int convert_tree_to_fits(TTree* tree, const char* tname,
-                                const char* out_path, long max_vla) {
+                                const char* out_path, long max_vla,
+                                const HeaderSpec& header = {}) {
     TTreeReader reader(tree);
 
     struct ColumnSpec {
@@ -321,6 +399,12 @@ inline int convert_tree_to_fits(TTree* tree, const char* tname,
                     ttype.data(), tform.data(), tunit.data(),
                     const_cast<char*>(tname), &status);
     check_fits(status, "create_tbl");
+
+    // Copied keywords go in first; template lines then append or override.
+    if (!header.copy_from.empty())
+        copy_header_keys(fptr, header.copy_from, status);
+    if (!header.templates.empty())
+        apply_header_templates(fptr, header.templates, status);
 
     LONGLONG row = 0;
     while (reader.Next()) {
