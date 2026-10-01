@@ -10,6 +10,8 @@
 //       [--define name=expr]... [--filter expr]...
 //       [--columns c1,c2,...] [--maxvla N] [--keep-snapshot path]
 //       [--header-from FILE] [--header FILE] [--header-key CARD]...
+//       [--primary-header-from FILE] [--primary-header FILE]
+//       [--primary-header-key CARD]...
 
 #include <stdlib.h>  // mkstemps (glibc)
 #include <unistd.h>
@@ -63,7 +65,9 @@ void usage(const char* prog) {
         "  --header-from copies header keywords from a FITS HDU; FILE may use\n"
         "                  cfitsio extended syntax (e.g. hk.fits[EVENTS]).\n"
         "  --header reads header-template lines (\"KEY = value / comment\") from FILE.\n"
-        "  --header-key adds one header-template line inline (repeatable).\n";
+        "  --header-key adds one header-template line inline (repeatable).\n"
+        "  --primary-header-from, --primary-header, --primary-header-key do the\n"
+        "                  same for the (empty) primary HDU instead of the bintable.\n";
 }
 
 } // namespace
@@ -78,7 +82,7 @@ int main(int argc, char** argv) {
     long max_vla = 65536;
     std::vector<std::string> columns;
     std::string keep_snapshot;
-    tree2fits::HeaderSpec header;
+    tree2fits::OutputHeaders headers;
 
     // Steps to apply to the RDataFrame in order.
     struct Step {
@@ -112,12 +116,7 @@ int main(int argc, char** argv) {
             max_vla = std::atol(need("--maxvla").c_str());
         } else if (a == "--keep-snapshot") {
             keep_snapshot = need("--keep-snapshot");
-        } else if (a == "--header-from") {
-            header.copy_from = need("--header-from");
-        } else if (a == "--header") {
-            tree2fits::read_header_template_file(need("--header"), header);
-        } else if (a == "--header-key") {
-            header.templates.push_back(need("--header-key"));
+        } else if (tree2fits::parse_header_option(a, need, headers)) {
         } else if (a == "-h" || a == "--help") {
             usage(argv[0]);
             return 0;
@@ -184,7 +183,7 @@ int main(int argc, char** argv) {
     }
 
     int rc = tree2fits::convert_tree_to_fits(tree, tname.c_str(),
-                                             out_path.c_str(), max_vla, header);
+                                             out_path.c_str(), max_vla, headers);
 
     f.reset();  // close file before unlinking
     if (delete_snap) {

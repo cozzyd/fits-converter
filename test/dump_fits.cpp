@@ -26,6 +26,22 @@ int main(int argc, char** argv) {
     fits_open_file(&fp, argv[1], READONLY, &status);
     check(status, "open");
 
+    // Non-structural keywords of the (empty) primary HDU, i.e. whatever
+    // --primary-header* injected.
+    {
+        int nkeys = 0;
+        fits_get_hdrspace(fp, &nkeys, nullptr, &status);
+        check(status, "primary hdrspace");
+        std::printf("HDU 1 (primary)\n");
+        for (int i = 1; i <= nkeys; ++i) {
+            char card[FLEN_CARD];
+            fits_read_record(fp, i, card, &status);
+            check(status, "primary read_record");
+            if (fits_get_keyclass(card) >= TYP_REFSYS_KEY)
+                std::printf("  hdr: %s\n", card);
+        }
+    }
+
     int hdunum = 0;
     fits_movabs_hdu(fp, 2, nullptr, &status);  // first table HDU
     check(status, "move to HDU 2");

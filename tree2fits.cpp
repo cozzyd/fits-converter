@@ -21,7 +21,9 @@ void usage(const char* prog) {
         "  --header-from FILE   copy header keywords from a FITS HDU;\n"
         "                       FILE may use cfitsio extended syntax (e.g. hk.fits[EVENTS])\n"
         "  --header FILE        read header-template lines (\"KEY = value / comment\") from FILE\n"
-        "  --header-key CARD    add one header-template line inline (repeatable)\n";
+        "  --header-key CARD    add one header-template line inline (repeatable)\n"
+        "  --primary-header-from FILE, --primary-header FILE, --primary-header-key CARD\n"
+        "                       same, but for the (empty) primary HDU instead of the bintable\n";
 }
 
 }  // namespace
@@ -36,7 +38,7 @@ int main(int argc, char** argv) {
     const char* out_path = argv[3];
 
     long max_vla = 65536;
-    tree2fits::HeaderSpec header;
+    tree2fits::OutputHeaders headers;
 
     for (int i = 4; i < argc; ++i) {
         std::string a = argv[i];
@@ -49,12 +51,7 @@ int main(int argc, char** argv) {
         };
         if (a == "--maxvla") {
             max_vla = std::atol(need("--maxvla").c_str());
-        } else if (a == "--header-from") {
-            header.copy_from = need("--header-from");
-        } else if (a == "--header") {
-            tree2fits::read_header_template_file(need("--header"), header);
-        } else if (a == "--header-key") {
-            header.templates.push_back(need("--header-key"));
+        } else if (tree2fits::parse_header_option(a, need, headers)) {
         } else if (a == "-h" || a == "--help") {
             usage(argv[0]);
             return 0;
@@ -79,5 +76,5 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    return tree2fits::convert_tree_to_fits(tree, tname, out_path, max_vla, header);
+    return tree2fits::convert_tree_to_fits(tree, tname, out_path, max_vla, headers);
 }

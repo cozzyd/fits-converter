@@ -237,7 +237,7 @@ inline void check_fits(int status, const char* what) {
     if (status) die_fits(status, what);
 }
 
-// Extra keywords to place in the output bintable header.
+// Extra keywords to place in one output HDU's header.
 struct HeaderSpec {
     // FITS file (cfitsio extended syntax, e.g. "hk.fits[EVENTS]") whose HDU
     // header is copied first. Empty = no copy.
@@ -245,6 +245,13 @@ struct HeaderSpec {
     // cfitsio header-template lines ("KEY = value / comment"), applied in
     // order after copy_from, so they override copied keywords.
     std::vector<std::string> templates;
+};
+
+// Headers for the two HDUs of the output: the (empty) primary HDU and the
+// bintable extension.
+struct OutputHeaders {
+    HeaderSpec primary;
+    HeaderSpec table;
 };
 
 // Copies keywords from the (possibly extension-qualified) source HDU,
@@ -313,11 +320,40 @@ inline void read_header_template_file(const std::string& path, HeaderSpec& spec)
     while (std::getline(in, line)) spec.templates.push_back(line);
 }
 
+// Copied keywords go in first; template lines then append or override.
+inline void apply_header_spec(fitsfile* out, const HeaderSpec& spec, int& status) {
+    if (!spec.copy_from.empty())
+        copy_header_keys(out, spec.copy_from, status);
+    if (!spec.templates.empty())
+        apply_header_templates(out, spec.templates, status);
+}
+
+// Shared CLI handling for the header options. `need(opt)` must return the
+// option's argument. Returns false if `a` is not a header option.
+//   --header-from / --header / --header-key                -> bintable HDU
+//   --primary-header-from / --primary-header / --primary-header-key -> primary HDU
+template <typename Need>
+bool parse_header_option(const std::string& a, Need&& need, OutputHeaders& headers) {
+    const bool primary = a.rfind("--primary-", 0) == 0;
+    HeaderSpec& spec = primary ? headers.primary : headers.table;
+    const std::string opt = primary ? "--" + a.substr(10) : a;
+    if (opt == "--header-from") {
+        spec.copy_from = need(a.c_str());
+    } else if (opt == "--header") {
+        read_header_template_file(need(a.c_str()), spec);
+    } else if (opt == "--header-key") {
+        spec.templates.push_back(need(a.c_str()));
+    } else {
+        return false;
+    }
+    return true;
+}
+
 // Walks the tree's leaves and writes a FITS binary table HDU. Returns 0 on
 // success. Exits the process on FITS errors via die_fits().
 inline int convert_tree_to_fits(TTree* tree, const char* tname,
                                 const char* out_path, long max_vla,
-                                const HeaderSpec& header = {}) {
+                                const OutputHeaders& headers = {}) {
     TTreeReader reader(tree);
 
     struct ColumnSpec {
@@ -387,6 +423,12 @@ inline int convert_tree_to_fits(TTree* tree, const char* tname,
     fits_create_file(&fptr, outspec.c_str(), &status);
     check_fits(status, "create_file");
 
+    // Explicit empty primary HDU so its header can be filled before the
+    // table is appended (fits_create_tbl would otherwise make a bare one).
+    fits_create_img(fptr, BYTE_IMG, 0, nullptr, &status);
+    check_fits(status, "create primary HDU");
+    apply_header_spec(fptr, headers.primary, status);
+
     const int ncols = static_cast<int>(cols.size());
     std::vector<char*> ttype(ncols), tform(ncols), tunit(ncols);
     std::string empty;
@@ -400,11 +442,7 @@ inline int convert_tree_to_fits(TTree* tree, const char* tname,
                     const_cast<char*>(tname), &status);
     check_fits(status, "create_tbl");
 
-    // Copied keywords go in first; template lines then append or override.
-    if (!header.copy_from.empty())
-        copy_header_keys(fptr, header.copy_from, status);
-    if (!header.templates.empty())
-        apply_header_templates(fptr, header.templates, status);
+    apply_header_spec(fptr, headers.table, status);
 
     LONGLONG row = 0;
     while (reader.Next()) {

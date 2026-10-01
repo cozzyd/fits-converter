@@ -34,6 +34,12 @@ test: all
 		--header test/header.txt \
 		--header-key "ORIGIN = 'KICP' / written at UChicago"
 	./test/dump_fits /tmp/test_tree_hdr.fits
+	@echo "=== with separate primary and bintable headers ==="
+	./tree2fits /tmp/test_tree.root events /tmp/test_tree_phdr.fits \
+		--primary-header test/header.txt \
+		--primary-header-key "ORIGIN = 'KICP' / written at UChicago" \
+		--header-key "HDUCLAS1 = 'EVENTS' / table contents"
+	./test/dump_fits /tmp/test_tree_phdr.fits
 
 clean:
 	rm -f $(BINS)
